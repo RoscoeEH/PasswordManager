@@ -1,1 +1,2 @@
 # PasswordManager
+A client-server model password manager written in rust. Uses Tokio for aync server functions and RustCrypto for AES-GCM encryption and SHA2 hashing. All data communicated between client and server is either hashed or encrypted, keys are not stored in either client or server and must be entered into the client at time of use.

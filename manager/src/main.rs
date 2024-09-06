@@ -3,7 +3,7 @@ mod client;
 
 use std::env;
 
-fnmain() {
+fn main() {
     letargs: Vec<String> = env::args().collect();
 
     if args.len() < 2 {

@@ -40,6 +40,22 @@ fn encrypt(message: String, key: [u8, 32]) -> Result<Vec<u8>, Error>{
 }
 
 
+fn decrypt(ciphertext: Vec<u8>, aesKey: [u8, 32]) -> Result<Vec<u8>, Error>{
+
+    // Extract nonce and ciphertext
+    let (nonce, ciphertext) = encrypted_data.split_at(12);
+    let key = Key::<Aes256Gcm>::from_slice(&aesKey);
+    let cipher = Aes256Gcm::new(&use_key);
+
+    let plaintext = cipher.decrypt(Nonce::from_slice(nonce), ciphertext)?;
+
+    
+    return Ok(String::from_utf8(plaintext)?)
+
+}
+
+
+
 pub fn run() {
     get_key();
 }

@@ -66,7 +66,7 @@ fn decrypt(ciphertext: Vec<u8>, aesKey: [u8, 32]) -> Result<Vec<u8>, Error>{
 }
 
 fn hash(text: String){
-    
+   
 }
 
 

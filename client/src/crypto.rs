@@ -1,13 +1,12 @@
-#![allow(unused_imports)]
-#![allow(dead_code)]
-
-
 use hex_literal::hex;
 use pbkdf2::{pbkdf2_hmac, pbkdf2_hmac_array};
 use sha2::{Sha256, Digest};
 use std::io;
 use std::error::Error;
 use std::convert::TryFrom;
+
+use rand::Rng;
+use rand::distributions::Uniform;
 
 use aes_gcm::{aead::{Aead, AeadCore, KeyInit, OsRng}, Aes256Gcm, Nonce, Key};
 
@@ -47,7 +46,7 @@ pub fn decrypt(ciphertext: Vec<u8>, aes_key: [u8;32]) -> Vec<u8> {
     let (nonce, data) = ciphertext.split_at(12);
     let key = Key::<Aes256Gcm>::try_from(aes_key).expect("Invalid key length");
     let cipher = Aes256Gcm::new(&key);
-    
+   
     let plaintext = cipher.decrypt(Nonce::from_slice(nonce), data);
 
     plaintext.expect("Decryption Error")
@@ -67,7 +66,19 @@ pub fn hash(input: HashInputType) -> [u8;32] {
 
 
 // Generates new passwords
-// pub fn generate_password(length: u8, excludeChars: Vec<char>, useWords: bool, charMapping: bool) {
+pub fn generate_password(length: usize) -> String {
+    let mut password = String::new();
+    for _i in 0..length {
+	// Generate a random number to convert to an ascii character
+	let num = rand::thread_rng().gen_range(33..127);
 
-// }
+	// Adds the corresponding ascii char to the string
+	if let Some(c) = char::from_u32(num as u32) {
+            password.push(c);
+        }
+    }
+
+    password
+}
+
 

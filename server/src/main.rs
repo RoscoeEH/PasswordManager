@@ -1,18 +1,33 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use std::error::Error;
+use rocksdb::{DB};
+
+
+static STORAGE_PATH: &str = "password_map";
 
 
 fn store_password(pw: &[u8]) -> Result<(), Box<dyn Error>> {
+    
 
 
     Ok(())
 }
 
+
+
 fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    // Open rocksdb instance
+    let db = DB::open_default(STORAGE_PATH)?;
 
+    // Get the password
+    let password = match db.get(pw_id) {
+        Ok(Some(value)) => value, // If the password exists, return it
+        Ok(None) => return Err(Box::from("Password not found")), // Handle the case where no password is found
+        Err(e) => return Err(Box::new(e)), // Return an error if the database operation fails
+    };
 
-    Ok(vec![0u8])
+    Ok(password)
 }
 
 fn get_list() -> Result<Vec<u8>, Box<dyn Error>> {

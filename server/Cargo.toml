@@ -5,4 +5,4 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-rocksdb = "0.19"
+rocksdb = "0.20"

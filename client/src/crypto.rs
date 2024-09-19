@@ -15,11 +15,6 @@ const PBKDF_ITERATIONS: u32 = 600_000;
 const SALT: &[u8] = b"%&@/";
 
 
-// Function to convert a byte array to a hex string
-fn to_hex_string(bytes: [u8; 32]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
-
 
 // Takes in user password and generates key with PBKDF
 pub fn key_derivation(password: String) -> [u8;32]{
@@ -63,13 +58,11 @@ pub enum HashInputType {
     Bytes([u8; 32]),
 }
 
-pub fn hash(input: HashInputType) -> String {
-    let hash_bytes = match input {
-        HashInputType::Text(s) => Sha256::digest(s.as_bytes()).into(),
-        HashInputType::Bytes(arr) => Sha256::digest(&arr).into(),
-    };
-    
-    to_hex_string(hash_bytes)
+pub fn hash(input: HashInputType) -> [u8;32] {
+    match input {
+	HashInputType::Text(s) => Sha256::digest(s.as_bytes()).into(),
+	HashInputType::Bytes(arr) => Sha256::digest(&arr).into() 
+    }
 }
 
 

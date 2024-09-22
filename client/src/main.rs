@@ -15,23 +15,23 @@ mod crypto;
 static KEY: OnceLock<[u8; 32]> = OnceLock::new();
 
 // Password Structure
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct PasswordInfo {
-    Title_Hash: [u8;32],
-    Title: Vec<u8>,
-    User_ID: Vec<u8>,
-    Password: Vec<u8>,
-    URL: Vec<u8>,
+    title_hash: [u8;32],
+    title: Vec<u8>,
+    user_id: Vec<u8>,
+    password: Vec<u8>,
+    url: Vec<u8>,
 }
 
 // Takes the info for a new password converts it to ciphertext and serializes it to JSON
-fn wrap_password(title: String, userID: String, password: String, url: String) -> Result<String, Box<dyn Error>> {
+fn wrap_password(pw_title: String, pw_user_id: String, user_password: String, web_url: String) -> Result<String, Box<dyn Error>> {
     let data = PasswordInfo {
-        Title_Hash: crypto::hash(crypto::HashInputType::Text(title.clone())),
-        Title: crypto::encrypt(title, *KEY.get().unwrap()),
-        User_ID: crypto::encrypt(userID, *KEY.get().unwrap()),
-        Password: crypto::encrypt(password, *KEY.get().unwrap()),
-        URL: crypto::encrypt(url, *KEY.get().unwrap()),
+        title_hash: crypto::hash(crypto::HashInputType::Text(pw_title.clone())),
+        title: crypto::encrypt(pw_title, *KEY.get().unwrap()),
+        user_id: crypto::encrypt(pw_user_id, *KEY.get().unwrap()),
+        password: crypto::encrypt(user_password, *KEY.get().unwrap()),
+        url: crypto::encrypt(web_url, *KEY.get().unwrap()),
     };
 
     Ok(serde_json::to_string(&data)?)

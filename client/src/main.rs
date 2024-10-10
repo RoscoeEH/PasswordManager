@@ -1,3 +1,4 @@
+
 use tokio::net::TcpStream;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
@@ -53,6 +54,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // connect to server
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
     println!("Connected to the server!");
+
+
+    // Send request for password list
+    stream.write_all(&vec![3u8]);
 
 
     // TODO - Take in and handle user requests

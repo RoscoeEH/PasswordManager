@@ -22,7 +22,7 @@ struct PasswordInfo {
     url: Vec<u8>,
 }
 
-fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error>> {
+fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Open the RocksDB database
     let db = DB::open_default(STORAGE_PATH)?;
 
@@ -59,7 +59,7 @@ fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error>> {
 
 
 
-fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     // Open the RocksDB database
     let db = DB::open_default(STORAGE_PATH)?;
 
@@ -73,7 +73,7 @@ fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     }
 }
 
-fn get_list() -> Result<Vec<u8>, Box<dyn Error>> {
+fn get_list() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     // Open the RocksDB database
     let db = DB::open_default(STORAGE_PATH)?;
 
@@ -84,9 +84,17 @@ fn get_list() -> Result<Vec<u8>, Box<dyn Error>> {
     }
 }
 
+// Send data to the client
+async fn send(socket: &mut tokio::net::TcpStream, request_type: u8, data: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut response = vec![request_type];
+    response.extend_from_slice(data);
+    
+    socket.write_all(&response).await?;
+    Ok(())
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Assign address to localhost
     let address = String::from("127.0.0.1:8080");
 
@@ -101,7 +109,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 	// Spawn async task
 	tokio::spawn(async move {
-	    let mut buffer = vec![0; 1024];
+	    if let Err(e) = handle_connection(&mut socket, addr).await {
+		println!("Error handling connection from {}: {}", addr, e);
+	    }
+	});
+    }
+}
+
+async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::SocketAddr) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut buffer = vec![0; 1024];
 
 	    loop {
 		let n = match socket.read(&mut buffer).await {
@@ -121,72 +137,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
 		    continue;
 		}
 
-		// First byte as the request
-		let request = buffer[0];
+	let request = buffer[0];
+	let data = &buffer[1..n];
 
-		// Remaining bytes as data
-		let data = &buffer[1..n];
-
-		// Prepare the response as Vec<u8>
-		let response: Vec<u8> = match request {
-		    1 => {
-			// Request 1: Store a password
-			match store_password(data) {
-			    Ok(_) => vec![1u8], 
-			    Err(e) => {
-				println!("Failed to store password: {}", e);
-				vec![0u8] // 0 indicates an error
-			    }
-			}
+	match request {
+	    1 => {
+		match store_password(data) {
+		    Ok(_) => send(socket, 1, b"").await?,
+		    Err(e) => {
+			println!("Failed to store password: {}", e);
+			send(socket, 0, b"Store failed").await?
 		    }
-		    2 => {
-			// Request 2: Access password
-			match get_password(data) {
-			    Ok(password) => {
-				let mut response = vec![2u8];
-				response.extend(password);
-				response
-			    }
-			    Err(e) => {
-				println!("Failed to get password: {}", e);
-				vec![0u8] // 0 indicates an error
-			    }
-			}
-		    }
-		    3 => {
-			// Request 3: Access item list
-			match get_list() {
-                            Ok(item_list) => {
-                                let mut response = vec![3u8];
-                                response.extend(item_list); 
-                                response
-                            }
-                            Err(e) => {
-                                println!("Failed to get item list: {}", e);
-                                vec![0u8] // 0 indicates an error
-                            }
-                        }
-                    }
-                    4 => {
-                        // Request 4: Close session
-                        let mut response = vec![4u8]; 
-                        response.extend_from_slice(b"Session closed");
-                        response
-                    }
-		    _ => {
-                        // Unknown request
-                        let mut response = vec![0u8]; 
-                        response.extend_from_slice(b"Unknown request"); 
-                        response
-                    }
-                };
-
-                // Send the response
-                if let Err(e) = socket.write_all(&response).await {
-		    println!("Failed to write to socket: {}. Error: {}", addr, e);
-		    break;
-                }
+		}
 	    }
-        });
+	    2 => {
+		match get_password(data) {
+		    Ok(password) => send(socket, 2, &password).await?,
+		    Err(e) => {
+			println!("Failed to get password: {}", e);
+			send(socket, 0, b"Password not found").await?
+		    }
+		}
+	    }
+	    3 => {
+		match get_list() {
+		    Ok(item_list) => send(socket, 3, &item_list).await?,
+		    Err(e) => {
+			println!("Failed to get item list: {}", e);
+			send(socket, 0, b"List not found").await?
+		    }
+		}
+	    }
+	    4 => {
+		send(socket, 4, b"Session closed").await?;
+		break;
+	    }
+	    _ => {
+		send(socket, 0, b"Unknown request").await?;
+	    }
+	}
     }
+    Ok(())
 }

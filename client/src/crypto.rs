@@ -61,7 +61,8 @@ pub fn decrypt(ciphertext: Vec<u8>, aes_key: [u8;32]) -> Vec<u8> {
     let key = Key::<Aes256Gcm>::try_from(aes_key).expect("Invalid key length");
     let cipher = Aes256Gcm::new(&key);
    
-    let plaintext = cipher.decrypt(Nonce::from_slice(nonce), data);
+    let nonce = Nonce::try_from(nonce).expect("Invalid nonce length");
+    let plaintext = cipher.decrypt(&nonce, data);
 
     plaintext.expect("Decryption Error")
 }

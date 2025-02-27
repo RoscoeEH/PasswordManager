@@ -59,6 +59,10 @@ async fn send(stream: &mut TcpStream, request_type: u8, data: &[u8]) -> Result<(
     Ok(())
 }
 
+struct AppState {
+    input: String,
+}
+
 // Main client function that takes input and communicates with the server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -70,7 +74,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // connect to server
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
-    println!("Connected to the server!");
 
     // Setup terminal
     enable_raw_mode()?;
@@ -82,19 +85,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Send request for password list
     send(&mut stream, 3, b"").await?;
 
+    // In main(), before the loop:
+    let mut app_state = AppState {
+        input: String::new(),
+    };
+
     // Main application loop
     loop {
         terminal.draw(|frame| {
             let size = frame.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(
-                    [
-                        Constraint::Min(3),
-                        Constraint::Length(3),
-                    ]
-                    .as_slice()
-                )
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(3),
+                ].as_slice())
                 .split(size);
 
             // Main content
@@ -103,16 +108,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             frame.render_widget(content, chunks[0]);
 
             // Command input mini-buffer
-            let input = Paragraph::new("Type commands here:")
-                .block(Block::default().borders(Borders::ALL));
+            let input = Paragraph::new(app_state.input.as_str())
+                .block(Block::default().borders(Borders::ALL).title("Enter command:"));
             frame.render_widget(input, chunks[1]);
         })?;
 
         // Handle input
         if event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    break;
+                match key.code {
+                    KeyCode::Esc => break,
+                    KeyCode::Enter => {
+                        // Handle command
+                        app_state.input.clear();
+                    }
+                    KeyCode::Char(c) => {
+                        app_state.input.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        app_state.input.pop();
+                    }
+                    _ => {}
                 }
             }
         }

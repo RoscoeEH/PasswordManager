@@ -62,6 +62,16 @@ async fn send(stream: &mut TcpStream, request_type: u8, data: &[u8]) -> Result<(
 // Main client function that takes input and communicates with the server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // Get key and load it into oncelock
+    let input = rpassword::prompt_password("Enter Password: ")
+        .expect("Failed to read password");
+
+    KEY.set(crypto::key_derivation(input)).expect("Key has already been initialized");
+
+    // connect to server
+    let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
+    println!("Connected to the server!");
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -69,25 +79,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Get key and load it into oncelock
-    let mut input = String::new(); // Impliment rpassword for security in the future
-    println!("Enter Password: ");
-    stdIO::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read line");
-
-    KEY.set(crypto::key_derivation(input)).expect("Key has already been initialized");
-
-    
-    // connect to server
-    let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
-    println!("Connected to the server!");
-
-
     // Send request for password list
-    stream.write_all(&vec![3u8]).await?;
+    send(&mut stream, 3, b"").await?;
 
-    
     // Main application loop
     loop {
         terminal.draw(|frame| {

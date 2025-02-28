@@ -14,6 +14,7 @@ use crossterm::{
     terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
+use copypasta::{ClipboardContext, ClipboardProvider};
 
 use std::error::Error;
 use std::sync::OnceLock;
@@ -92,6 +93,8 @@ struct AppState {
     url: String,
     password_list: Vec<ListItem>,
     current_password: Option<PasswordInfo>,
+    show_password: bool,
+    waiting_for_second_key: Option<char>,
 }
 
 // Add this struct to store password list items
@@ -174,6 +177,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         url: String::new(),
         password_list: Vec::new(),
         current_password: None,
+        show_password: false,
+        waiting_for_second_key: None,
     };
 
     // After sending the initial list request, receive and process the response
@@ -225,9 +230,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     display.push_str("\nPassword Details:\n");
                     display.push_str(&format!("\nTitle: {}", String::from_utf8_lossy(&pw_info.title)));
                     display.push_str(&format!("\nUsername: {}", String::from_utf8_lossy(&pw_info.user_id)));
-                    display.push_str(&format!("\nPassword: {}", String::from_utf8_lossy(&pw_info.password)));
+                    
+                    let password = String::from_utf8_lossy(&pw_info.password);
+                    if app_state.show_password {
+                        display.push_str(&format!("\nPassword: {}", password));
+                    } else {
+                        display.push_str(&format!("\nPassword: {}", "*".repeat(password.len())));
+                    }
+                    
                     display.push_str(&format!("\nURL: {}", String::from_utf8_lossy(&pw_info.url)));
-                    display.push_str("\n\nPress Esc to return to password list");
+                    display.push_str("\n\nPress 's' to show/hide password");
+                    display.push_str("\nPress 'c-p' to copy password");
+                    display.push_str("\nPress 'c-u' to copy username");
+                    display.push_str("\nPress Esc to return to password list");
                 } else {
                     display.push_str("\nStored Passwords:\n");
                     for item in &app_state.password_list {
@@ -262,6 +277,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 match key.code {
                     KeyCode::Esc => {
                         app_state.current_password = None;
+                        app_state.show_password = false;
+                        app_state.waiting_for_second_key = None;
                         
                         if app_state.input_mode != InputMode::Command {
                             app_state.input.clear();
@@ -344,26 +361,62 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     },
                     KeyCode::Char(c) => {
                         if app_state.input_mode == InputMode::Command {
-                            match c {
-                                's' => {
-                                    app_state.input_mode = InputMode::Title;
-                                },
-                                'd' => {
-                                    app_state.input_mode = InputMode::Delete;
-                                },
-                                'g' => {
-                                    app_state.input_mode = InputMode::Get;
-                                },
-                                'f' => {
-                                    let _ = update_password_list(&mut stream, &mut app_state).await;
-                                },
-                                'h' => {
-                                    app_state.input_mode = InputMode::Help;
-                                },
-                                'q' => {
-                                    break;
-                                },
-                                _ => {}
+                            if let Some(first_key) = app_state.waiting_for_second_key {
+                                // Handle second key of combination
+                                match (first_key, c) {
+                                    ('c', 'p') => {
+                                        if let Some(pw_info) = &app_state.current_password {
+                                            if let Ok(password) = String::from_utf8(pw_info.password.clone()) {
+                                                if let Ok(mut ctx) = ClipboardContext::new() {
+                                                    let _ = ctx.set_contents(password);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    ('c', 'u') => {
+                                        if let Some(pw_info) = &app_state.current_password {
+                                            if let Ok(username) = String::from_utf8(pw_info.user_id.clone()) {
+                                                if let Ok(mut ctx) = ClipboardContext::new() {
+                                                    let _ = ctx.set_contents(username);
+                                                }
+                                            }
+                                        }
+                                    },
+                                    _ => {}
+                                }
+                                app_state.waiting_for_second_key = None;
+                            } else {
+                                // Handle first key press
+                                match c {
+                                    'c' => {
+                                        if app_state.current_password.is_some() {
+                                            app_state.waiting_for_second_key = Some('c');
+                                        }
+                                    },
+                                    's' => {
+                                        if app_state.current_password.is_some() {
+                                            app_state.show_password = !app_state.show_password;
+                                        } else {
+                                            app_state.input_mode = InputMode::Title;
+                                        }
+                                    },
+                                    'd' => {
+                                        app_state.input_mode = InputMode::Delete;
+                                    },
+                                    'g' => {
+                                        app_state.input_mode = InputMode::Get;
+                                    },
+                                    'f' => {
+                                        let _ = update_password_list(&mut stream, &mut app_state).await;
+                                    },
+                                    'h' => {
+                                        app_state.input_mode = InputMode::Help;
+                                    },
+                                    'q' => {
+                                        break;
+                                    },
+                                    _ => {}
+                                }
                             }
                         } else if app_state.input_mode == InputMode::Help {
                             app_state.input_mode = InputMode::Command;

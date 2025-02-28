@@ -23,16 +23,13 @@ struct PasswordInfo {
 }
 
 fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Open the RocksDB database
     let db = DB::open_default(STORAGE_PATH)?;
-
-    // Deserialize the JSON into the PasswordInfo struct
     let pw_info: PasswordInfo = serde_json::from_slice(pw_json)?;
-
-    // Convert the title_hash to a string for storage as the key
     let title_hash_str = hex::encode(pw_info.title_hash);
-
-    // Store the full JSON under the title_hash key
+    
+    println!("Storing password with hash: {}", title_hash_str);
+    println!("Raw hash bytes: {:?}", pw_info.title_hash);
+    
     db.put(&title_hash_str, pw_json)?;
 
     // Prepare the reduced JSON with only title and url
@@ -41,16 +38,13 @@ fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
 	"url": str::from_utf8(&pw_info.url)?
     });
 
-    // Fetch the current list of titles and URLs from the FULL_LIST key
+    // Update the full list
     let mut full_list: Vec<Value> = match db.get(FULL_LIST)? {
 	Some(list_data) => serde_json::from_slice(&list_data)?,
 	None => Vec::new(),
     };
 
-    // Add the new reduced JSON to the list
     full_list.push(reduced_json);
-
-    // Serialize the updated list and store it back in the database
     let updated_list = serde_json::to_vec(&full_list)?;
     db.put(FULL_LIST, updated_list)?;
 
@@ -69,7 +63,7 @@ fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     // Retrieve the full JSON stored under the title_hash key
     match db.get(&pw_id_str)? {
         Some(value) => Ok(value),  // Return the full JSON as Vec<u8>
-        None => Err(Box::from("Password not found")),  // Handle case where the key doesn't exist
+        None => Err(Box::from("Password not found")), 
     }
 }
 
@@ -80,8 +74,57 @@ fn get_list() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     // Retrieve the list stored under the FULL_LIST key
     match db.get(FULL_LIST)? {
         Some(value) => Ok(value),  // Return the full list as Vec<u8>
-        None => Err(Box::from("No accounts list found")),  // Handle case where the list doesn't exist
+        None => Err(Box::from("No accounts list found")),
     }
+}
+
+fn delete_password(title_hash: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let db = DB::open_default(STORAGE_PATH)?;
+    let title_hash_str = hex::encode(title_hash);
+    
+    println!("Attempting to delete password with hash: {}", title_hash_str);
+    println!("Raw delete hash bytes: {:?}", title_hash);
+    
+    // First get the password info to find the title
+    let title_to_remove = if let Some(pw_data) = db.get(&title_hash_str)? {
+        println!("Found password data in database");
+        if let Ok(pw_info) = serde_json::from_slice::<PasswordInfo>(&pw_data) {
+            let title = str::from_utf8(&pw_info.title)?.to_string();
+            println!("Found title to remove: {}", title);
+            title
+        } else {
+            return Err(Box::from("Failed to parse password info"));
+        }
+    } else {
+        println!("No password found with hash: {}", title_hash_str);
+        return Err(Box::from("Password not found"));
+    };
+
+    // Update the full list by removing the entry
+    let mut full_list: Vec<Value> = match db.get(FULL_LIST)? {
+        Some(list_data) => serde_json::from_slice(&list_data)?,
+        None => Vec::new(),
+    };
+
+    println!("Current list size: {}", full_list.len());
+    
+    // Remove the entry from the list
+    full_list.retain(|item| {
+        item.get("title")
+            .and_then(|t| t.as_str())
+            .map_or(true, |t| t != &title_to_remove)
+    });
+    
+    println!("New list size: {}", full_list.len());
+    
+    // Update the full list
+    let updated_list = serde_json::to_vec(&full_list)?;
+    db.put(FULL_LIST, updated_list)?;
+
+    // Finally delete the password entry
+    db.delete(&title_hash_str)?;
+
+    Ok(())
 }
 
 // Send data to the client
@@ -119,63 +162,104 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::SocketAddr) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut buffer = vec![0; 1024];
 
-	    loop {
-		let n = match socket.read(&mut buffer).await {
-		    Ok(0) => {
-			println!("Connection closed by client: {}", addr);
-			break;
-		    }
-		    Ok(n) => n,
-		    Err(e) => {
-			println!("Failed to read from socket: {}. Error: {}", addr, e);
-			break;
-		    }
-		};
+    loop {
+        let n = match socket.read(&mut buffer).await {
+            Ok(0) => {
+                println!("Connection closed by client: {}", addr);
+                break;
+            }
+            Ok(n) => {
+                println!("Received {} bytes from client {}", n, addr);
+                n
+            }
+            Err(e) => {
+                println!("Failed to read from socket: {}. Error: {}", addr, e);
+                break;
+            }
+        };
 
-		if n < 2 {
-		    println!("Insufficient data received from client {}", addr);
-		    continue;
-		}
+        if n < 1 {
+            println!("No data received from client {}", addr);
+            continue;
+        }
 
-	let request = buffer[0];
-	let data = &buffer[1..n];
-
-	match request {
-	    1 => {
-		match store_password(data) {
-		    Ok(_) => send(socket, 1, b"").await?,
-		    Err(e) => {
-			println!("Failed to store password: {}", e);
-			send(socket, 0, b"Store failed").await?
-		    }
-		}
-	    }
-	    2 => {
-		match get_password(data) {
-		    Ok(password) => send(socket, 2, &password).await?,
-		    Err(e) => {
-			println!("Failed to get password: {}", e);
-			send(socket, 0, b"Password not found").await?
-		    }
-		}
-	    }
-	    3 => {
-		match get_list() {
-		    Ok(item_list) => send(socket, 3, &item_list).await?,
-		    Err(e) => {
-			println!("Failed to get item list: {}", e);
-			send(socket, 0, b"List not found").await?
-		    }
-		}
-	    }
-	    4 => {
-		send(socket, 4, b"Session closed").await?;
-		break;
-	    }
-	    _ => {
-		send(socket, 0, b"Unknown request").await?;
-	    }
-	}
+        let request = buffer[0];
+        let data = if request == 5 {
+            // For delete requests, take exactly 32 bytes
+            &buffer[1..33]
+        } else {
+            &buffer[1..n]
+        };
+        
+        match request {
+            1 => {
+                println!("Processing store password request from {}", addr);
+                // Find the end of the JSON data (looking for '}')
+                let json_end = data.iter()
+                    .position(|&x| x == b'}')
+                    .map(|p| p + 1)
+                    .unwrap_or(data.len());
+                
+                let clean_data = &data[..json_end];
+                
+                match serde_json::from_slice::<PasswordInfo>(clean_data) {
+                    Ok(info) => {
+                        println!("Successfully parsed JSON");
+                        match store_password(clean_data) {
+                            Ok(_) => send(socket, 1, b"").await?,
+                            Err(e) => {
+                                println!("Failed to store password: {}", e);
+                                send(socket, 0, b"Store failed").await?
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        println!("JSON parsing error: {}", e);
+                        println!("Raw data (hex): {:?}", clean_data);
+                        send(socket, 0, b"Invalid JSON format").await?
+                    }
+                }
+            }
+            2 => {
+                match get_password(data) {
+                    Ok(password) => send(socket, 2, &password).await?,
+                    Err(e) => {
+                        println!("Failed to get password: {}", e);
+                        send(socket, 0, b"Password not found").await?
+                    }
+                }
+            }
+            3 => {
+                println!("Processing list request from {}", addr);
+                match get_list() {
+                    Ok(item_list) => send(socket, 3, &item_list).await?,
+                    Err(e) => {
+                        println!("Failed to get item list: {}", e);
+                        // Send empty list instead of error
+                        let empty_list = serde_json::to_vec(&Vec::<Value>::new())?;
+                        send(socket, 3, &empty_list).await?
+                    }
+                }
+            }
+            4 => {
+                send(socket, 4, b"Session closed").await?;
+                break;
+            }
+            5 => {
+                println!("Processing delete request from {}", addr);
+                match delete_password(data) {
+                    Ok(_) => send(socket, 5, b"Password deleted").await?,
+                    Err(e) => {
+                        println!("Failed to delete password: {}", e);
+                        send(socket, 0, b"Delete failed").await?
+                    }
+                }
+            }
+            _ => {
+                println!("Unknown request type: {}", request);
+                send(socket, 0, b"Unknown request").await?;
+            }
+        }
     }
     Ok(())
 }

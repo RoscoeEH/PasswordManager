@@ -9,6 +9,7 @@ sha2 = { git = "https://github.com/RustCrypto/hashes", package = "sha2" }
 aes-gcm = { git = "https://github.com/RustCrypto/AEADs", package = "aes-gcm" }
 pbkdf2 = { git = "https://github.com/RustCrypto/password-hashes", package = "pbkdf2" }
 hex-literal = "0.3"
+hex = "0.4"
 rand = "0.8"
 rand_core = "0.6"
 serde = { version = "1.0", features = ["derive"] }

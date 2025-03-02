@@ -38,13 +38,14 @@ pub fn key_derivation(password: String) -> [u8; 32] {
 // #[test]
 pub fn pbkdf2_kat() {
     let password = "test_password".to_string();
+
     let expected_key: [u8; 32] = [
         0x57, 0x49, 0x0a, 0xf8, 0x65, 0x9b, 0x91, 0x45, 0xca, 0x91, 0x2d, 0x1e, 0x4b, 0xa2, 0xb3,
         0x34, 0x38, 0xae, 0xbe, 0x0b, 0xc8, 0x9e, 0xdf, 0xf8, 0xe0, 0xa6, 0x49, 0xe4, 0x5e, 0xbb,
         0x22, 0xff,
     ];
     let derived_key = key_derivation(password);
-    assert_eq!(derived_key, expected_key);
+    assert_eq!(derived_key, expected_key, "PBKDF2 KAT Failed");
 }
 
 // Uses AES256gcm authenticated encryption to encrypt a string
@@ -95,11 +96,15 @@ pub fn aes256_kat() {
     let encrypted = encrypt(plaintext.clone(), key);
 
     // Ensure that encryption produced output longer than just the nonce
-    assert!(encrypted.len() > 12);
+    assert!(encrypted.len() > 12, "AES-256 KAT Failed - No ciphertext");
 
     // Decrypt back and compare with the original plaintext
     let decrypted = decrypt(encrypted, key);
-    assert_eq!(decrypted, plaintext.as_bytes());
+    assert_eq!(
+        decrypted,
+        plaintext.as_bytes(),
+        "AES-256 KAT Failed - Plaintext does not match ciphertext"
+    );
 }
 
 // Enum to adapt hash to work for both a string and a [u8;32]
@@ -121,11 +126,11 @@ pub fn sha256_kat() {
     let text_input = "hello world".to_string();
     let expected_hash: [u8; 32] = [
         0xb9, 0x4d, 0x27, 0xb9, 0x93, 0x4d, 0x3e, 0x08, 0xa5, 0x2e, 0x52, 0xd7, 0xda, 0x7d, 0xab,
-        0xfa, 0xc4, 0x7c, 0xa8, 0x7d, 0x4e, 0xf9, 0x3b, 0xb8, 0x24, 0xa0, 0x52, 0x20, 0x89, 0x7a,
-        0xfa, 0x3d,
+        0xfa, 0xc4, 0x84, 0xef, 0xe3, 0x7a, 0x53, 0x80, 0xee, 0x90, 0x88, 0xf7, 0xac, 0xe2, 0xef,
+        0xcd, 0xe9,
     ];
     let computed_hash = hash(HashInputType::Text(text_input));
-    assert_eq!(computed_hash, expected_hash);
+    assert_eq!(computed_hash, expected_hash, "SHA2-256 KAT Failed");
 }
 
 // Randomly generates string of a given size

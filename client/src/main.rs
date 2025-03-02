@@ -175,8 +175,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     crypto::sha256_kat();
     println!("All KATs passed!");
 
-    let test_pw = crypto::generate_password(8);
-    println!("Generated 8-digit test password {}", test_pw);
+    let test_pw = crypto::generate_password(20);
+    println!("Generated 20-digit test password {}", test_pw);
 
     // Get key and load it into oncelock
     let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");

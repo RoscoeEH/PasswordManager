@@ -169,33 +169,24 @@ async fn update_password_list(
 // Main client function that takes input and communicates with the server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // KATs
+    crypto::aes256_kat();
+    crypto::pbkdf2_kat();
+    crypto::sha256_kat();
+    println!("All KATs passed!");
+
+    let test_pw = crypto::generate_password(8);
+    println!("Generated 8-digit test password {}", test_pw);
+
     // Get key and load it into oncelock
     let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
 
     KEY.set(crypto::key_derivation(input))
         .expect("Key has already been initialized");
 
-    // Test encryption/decryption
-    let test_string = "test encryption";
-    println!("Testing encryption/decryption with string: {}", test_string);
-
-    let key = KEY.get().expect("Key not initialized");
-    let encrypted = crypto::encrypt(test_string.to_string(), *key);
-    println!("Encrypted bytes: {:?}", encrypted);
-
-    let decrypted = crypto::decrypt(encrypted, *key);
-    println!("Decrypted bytes: {:?}", decrypted);
-
-    if let Ok(decrypted_str) = String::from_utf8(decrypted) {
-        println!("Decrypted string: {}", decrypted_str);
-        if decrypted_str == test_string {
-            println!("Encryption/decryption test passed!");
-        } else {
-            panic!("Decrypted string doesn't match original!");
-        }
-    } else {
-        panic!("Failed to convert decrypted bytes to string!");
-    }
+    ////////////////////
+    // App Connection //
+    ////////////////////
 
     // connect to server
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;

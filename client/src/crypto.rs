@@ -15,7 +15,7 @@ use pbkdf2::pbkdf2_hmac_array;
 use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
 
-use rand::distributions::{Alphanumeric, DistString};
+use rand::{thread_rng, Rng};
 
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit},
@@ -135,7 +135,13 @@ pub fn sha256_kat() {
 
 // Randomly generates string of a given size
 pub fn generate_password(length: usize) -> String {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), length);
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                             abcdefghijklmnopqrstuvwxyz\
+                             0123456789\
+                             !@#$%^&*()-_=+[]{}|;:'\",.<>?/";
+    let mut rng = thread_rng();
 
-    password
+    (0..length)
+        .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
+        .collect()
 }

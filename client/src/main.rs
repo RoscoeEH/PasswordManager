@@ -1,34 +1,32 @@
 #![allow(dead_code)]
 
-use tokio::net::TcpStream;
-use tokio::io::AsyncWriteExt;
-use tokio::io::AsyncReadExt;
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-    widgets::{Block, Borders, Paragraph},
-    layout::{Layout, Constraint, Direction},
-};
+use copypasta::{ClipboardContext, ClipboardProvider};
 use crossterm::{
     event::{self, Event, KeyCode},
-    terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use copypasta::{ClipboardContext, ClipboardProvider};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    widgets::{Block, Borders, Paragraph},
+    Terminal,
+};
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 
 use std::error::Error;
-use std::sync::OnceLock;
 use std::io::{self as stdIO, stdout};
+use std::sync::OnceLock;
 
-use serde::{Serialize, Deserialize};
-use serde_json;
-use sha2::{Sha256, Digest};
-use std::str;
 use hex;
-
+use serde::{Deserialize, Serialize};
+use serde_json;
+use sha2::{Digest, Sha256};
+use std::str;
 
 mod crypto;
-
 
 // Global `OnceLock` for the key
 static KEY: OnceLock<[u8; 32]> = OnceLock::new();
@@ -43,17 +41,39 @@ struct PasswordInfo {
     url: Vec<u8>,
 }
 
+// Server list item structure
+#[derive(Serialize, Deserialize)]
+struct ServerListItem {
+    title_hash: [u8; 32],
+    title: Vec<u8>,
+    url: Vec<u8>,
+}
+
 // Takes the info for a new password converts it to ciphertext and serializes it to JSON
-fn wrap_password(title: String, user_id: String, password: String, url: String) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn wrap_password(
+    title: String,
+    user_id: String,
+    password: String,
+    url: String,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let title_hash = crypto::hash(crypto::HashInputType::Text(title.clone()));
 
-    // Create the PasswordInfo struct
+    // Get the key from the OnceLock
+    let key = KEY.get().expect("Key not initialized");
+
+    // Encrypt the sensitive fields
+    let encrypted_title = crypto::encrypt(title, *key);
+    let encrypted_user_id = crypto::encrypt(user_id, *key);
+    let encrypted_password = crypto::encrypt(password, *key);
+    let encrypted_url = crypto::encrypt(url, *key);
+
+    // Create the PasswordInfo struct with encrypted data
     let password_info = PasswordInfo {
         title_hash,
-        title: title.as_bytes().to_vec(),
-        user_id: user_id.as_bytes().to_vec(),
-        password: password.as_bytes().to_vec(),
-        url: url.as_bytes().to_vec(),
+        title: encrypted_title,
+        user_id: encrypted_user_id,
+        password: encrypted_password,
+        url: encrypted_url,
     };
 
     // Serialize to JSON
@@ -65,7 +85,7 @@ fn wrap_password(title: String, user_id: String, password: String, url: String) 
 async fn send(stream: &mut TcpStream, request_type: u8, data: &[u8]) -> Result<(), Box<dyn Error>> {
     let mut request = vec![request_type];
     request.extend_from_slice(data);
-    
+
     stream.write_all(&request).await?;
     Ok(())
 }
@@ -82,7 +102,6 @@ enum InputMode {
     Help,
     Get,
 }
-
 
 struct AppState {
     input: String,
@@ -111,30 +130,32 @@ async fn receive(stream: &mut TcpStream) -> Result<(u8, Vec<u8>), Box<dyn Error>
     if n == 0 {
         return Err("Connection closed by server".into());
     }
-    
+
     let response_type = buffer[0];
     let data = buffer[1..n].to_vec();
     Ok((response_type, data))
 }
 
 // Updates the password list from the server
-async fn update_password_list(stream: &mut TcpStream, app_state: &mut AppState) -> Result<(), Box<dyn Error>> {
+async fn update_password_list(
+    stream: &mut TcpStream,
+    app_state: &mut AppState,
+) -> Result<(), Box<dyn Error>> {
     if let Ok(_) = send(stream, 3, b"").await {
         if let Ok((response_type, data)) = receive(stream).await {
             if response_type == 3 {
-                if let Ok(list) = serde_json::from_slice::<Vec<serde_json::Value>>(&data) {
-                    app_state.password_list = list.into_iter()
+                if let Ok(list) = serde_json::from_slice::<Vec<ServerListItem>>(&data) {
+                    let key = KEY.get().expect("Key not initialized");
+
+                    app_state.password_list = list
+                        .into_iter()
                         .filter_map(|item| {
-                            if let (Some(title), Some(url)) = (
-                                item.get("title").and_then(|t| t.as_str()),
-                                item.get("url").and_then(|u| u.as_str())
+                            match (
+                                String::from_utf8(crypto::decrypt(item.title, *key)),
+                                String::from_utf8(crypto::decrypt(item.url, *key)),
                             ) {
-                                Some(ListItem {
-                                    title: title.to_string(),
-                                    url: url.to_string(),
-                                })
-                            } else {
-                                None
+                                (Ok(title), Ok(url)) => Some(ListItem { title, url }),
+                                _ => None,
                             }
                         })
                         .collect();
@@ -149,10 +170,32 @@ async fn update_password_list(stream: &mut TcpStream, app_state: &mut AppState) 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Get key and load it into oncelock
-    let input = rpassword::prompt_password("Enter Password: ")
-        .expect("Failed to read password");
+    let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
 
-    KEY.set(crypto::key_derivation(input)).expect("Key has already been initialized");
+    KEY.set(crypto::key_derivation(input))
+        .expect("Key has already been initialized");
+
+    // Test encryption/decryption
+    let test_string = "test encryption";
+    println!("Testing encryption/decryption with string: {}", test_string);
+
+    let key = KEY.get().expect("Key not initialized");
+    let encrypted = crypto::encrypt(test_string.to_string(), *key);
+    println!("Encrypted bytes: {:?}", encrypted);
+
+    let decrypted = crypto::decrypt(encrypted, *key);
+    println!("Decrypted bytes: {:?}", decrypted);
+
+    if let Ok(decrypted_str) = String::from_utf8(decrypted) {
+        println!("Decrypted string: {}", decrypted_str);
+        if decrypted_str == test_string {
+            println!("Encryption/decryption test passed!");
+        } else {
+            panic!("Decrypted string doesn't match original!");
+        }
+    } else {
+        panic!("Failed to convert decrypted bytes to string!");
+    }
 
     // connect to server
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
@@ -184,19 +227,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // After sending the initial list request, receive and process the response
     let (response_type, data) = receive(&mut stream).await?;
     if response_type == 3 {
-        if let Ok(list) = serde_json::from_slice::<Vec<serde_json::Value>>(&data) {
-            app_state.password_list = list.into_iter()
+        if let Ok(list) = serde_json::from_slice::<Vec<ServerListItem>>(&data) {
+            let key = KEY.get().expect("Key not initialized");
+
+            app_state.password_list = list
+                .into_iter()
                 .filter_map(|item| {
-                    if let (Some(title), Some(url)) = (
-                        item.get("title").and_then(|t| t.as_str()),
-                        item.get("url").and_then(|u| u.as_str())
+                    match (
+                        String::from_utf8(crypto::decrypt(item.title, *key)),
+                        String::from_utf8(crypto::decrypt(item.url, *key)),
                     ) {
-                        Some(ListItem {
-                            title: title.to_string(),
-                            url: url.to_string(),
-                        })
-                    } else {
-                        None
+                        (Ok(title), Ok(url)) => Some(ListItem { title, url }),
+                        _ => None,
                     }
                 })
                 .collect();
@@ -209,12 +251,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let size = frame.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(3),
-                    Constraint::Length(3),
-                ].as_slice())
+                .constraints([Constraint::Min(3), Constraint::Length(3)].as_slice())
                 .split(size);
-
 
             let content = {
                 let mut display = String::from("Password Manager\n");
@@ -227,18 +265,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     display.push_str("- q: Quit the program\n");
                     display.push_str("- h: Show this help\n");
                 } else if let Some(pw_info) = &app_state.current_password {
+                    let key = KEY.get().expect("Key not initialized");
+
+                    // Decrypt all fields
+                    let title = String::from_utf8(crypto::decrypt(pw_info.title.clone(), *key))
+                        .unwrap_or_else(|_| "Invalid UTF-8".to_string());
+                    let username =
+                        String::from_utf8(crypto::decrypt(pw_info.user_id.clone(), *key))
+                            .unwrap_or_else(|_| "Invalid UTF-8".to_string());
+                    let password =
+                        String::from_utf8(crypto::decrypt(pw_info.password.clone(), *key))
+                            .unwrap_or_else(|_| "Invalid UTF-8".to_string());
+                    let url = String::from_utf8(crypto::decrypt(pw_info.url.clone(), *key))
+                        .unwrap_or_else(|_| "Invalid UTF-8".to_string());
+
                     display.push_str("\nPassword Details:\n");
-                    display.push_str(&format!("\nTitle: {}", String::from_utf8_lossy(&pw_info.title)));
-                    display.push_str(&format!("\nUsername: {}", String::from_utf8_lossy(&pw_info.user_id)));
-                    
-                    let password = String::from_utf8_lossy(&pw_info.password);
+                    display.push_str(&format!("\nTitle: {}", title));
+                    display.push_str(&format!("\nUsername: {}", username));
+
                     if app_state.show_password {
                         display.push_str(&format!("\nPassword: {}", password));
                     } else {
                         display.push_str(&format!("\nPassword: {}", "*".repeat(password.len())));
                     }
-                    
-                    display.push_str(&format!("\nURL: {}", String::from_utf8_lossy(&pw_info.url)));
+
+                    display.push_str(&format!("\nURL: {}", url));
                     display.push_str("\n\nPress 's' to show/hide password");
                     display.push_str("\nPress 'c-p' to copy password");
                     display.push_str("\nPress 'c-u' to copy username");
@@ -251,8 +302,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 display
             };
-            let content = Paragraph::new(content)
-                .block(Block::default().borders(Borders::ALL));
+            let content = Paragraph::new(content).block(Block::default().borders(Borders::ALL));
             frame.render_widget(content, chunks[0]);
 
             // Command input mini-buffer
@@ -279,7 +329,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         app_state.current_password = None;
                         app_state.show_password = false;
                         app_state.waiting_for_second_key = None;
-                        
+
                         if app_state.input_mode != InputMode::Command {
                             app_state.input.clear();
                             app_state.title.clear();
@@ -288,46 +338,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             app_state.url.clear();
                             app_state.input_mode = InputMode::Command;
                         }
-                    },
+                    }
                     KeyCode::Enter => {
                         match app_state.input_mode {
-                            InputMode::Command => {
-                            },
+                            InputMode::Command => {}
                             InputMode::Delete => {
                                 let title = app_state.input.clone();
-                                let title_hash = crypto::hash(crypto::HashInputType::Text(title.clone()));
-                                
+                                let title_hash =
+                                    crypto::hash(crypto::HashInputType::Text(title.clone()));
+
                                 if let Ok(_) = send(&mut stream, 5, &title_hash[0..32]).await {
                                     let _ = update_password_list(&mut stream, &mut app_state).await;
                                 }
                                 app_state.input.clear();
                                 app_state.input_mode = InputMode::Command;
-                            },
+                            }
                             InputMode::Title => {
                                 app_state.title = app_state.input.clone();
                                 app_state.input.clear();
                                 app_state.input_mode = InputMode::UserId;
-                            },
+                            }
                             InputMode::UserId => {
                                 app_state.user_id = app_state.input.clone();
                                 app_state.input.clear();
                                 app_state.input_mode = InputMode::Password;
-                            },
+                            }
                             InputMode::Password => {
                                 app_state.password = app_state.input.clone();
                                 app_state.input.clear();
                                 app_state.input_mode = InputMode::Url;
-                            },
+                            }
                             InputMode::Url => {
                                 app_state.url = app_state.input.clone();
                                 if let Ok(json) = wrap_password(
                                     app_state.title.clone(),
                                     app_state.user_id.clone(),
                                     app_state.password.clone(),
-                                    app_state.url.clone()
+                                    app_state.url.clone(),
                                 ) {
                                     if let Ok(_) = send(&mut stream, 1, &json).await {
-                                        let _ = update_password_list(&mut stream, &mut app_state).await;
+                                        let _ =
+                                            update_password_list(&mut stream, &mut app_state).await;
                                     }
                                 }
                                 app_state.input.clear();
@@ -336,19 +387,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 app_state.password.clear();
                                 app_state.url.clear();
                                 app_state.input_mode = InputMode::Command;
-                            },
+                            }
                             InputMode::Help => {
                                 app_state.input_mode = InputMode::Command;
-                            },
+                            }
                             InputMode::Get => {
                                 let title = app_state.input.clone();
                                 let title_hash = crypto::hash(crypto::HashInputType::Text(title));
-                                
+
                                 // Send get request (type 2) with the title hash
                                 if let Ok(_) = send(&mut stream, 2, &title_hash).await {
                                     if let Ok((response_type, data)) = receive(&mut stream).await {
                                         if response_type == 2 {
-                                            if let Ok(pw_info) = serde_json::from_slice::<PasswordInfo>(&data) {
+                                            if let Ok(pw_info) =
+                                                serde_json::from_slice::<PasswordInfo>(&data)
+                                            {
                                                 app_state.current_password = Some(pw_info);
                                             }
                                         }
@@ -356,9 +409,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 }
                                 app_state.input.clear();
                                 app_state.input_mode = InputMode::Command;
-                            },
+                            }
                         }
-                    },
+                    }
                     KeyCode::Char(c) => {
                         if app_state.input_mode == InputMode::Command {
                             if let Some(first_key) = app_state.waiting_for_second_key {
@@ -366,22 +419,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 match (first_key, c) {
                                     ('c', 'p') => {
                                         if let Some(pw_info) = &app_state.current_password {
-                                            if let Ok(password) = String::from_utf8(pw_info.password.clone()) {
+                                            let key = KEY.get().expect("Key not initialized");
+                                            if let Ok(decrypted) = String::from_utf8(
+                                                crypto::decrypt(pw_info.password.clone(), *key),
+                                            ) {
                                                 if let Ok(mut ctx) = ClipboardContext::new() {
-                                                    let _ = ctx.set_contents(password);
+                                                    let _ = ctx.set_contents(decrypted);
                                                 }
                                             }
                                         }
-                                    },
+                                    }
                                     ('c', 'u') => {
                                         if let Some(pw_info) = &app_state.current_password {
-                                            if let Ok(username) = String::from_utf8(pw_info.user_id.clone()) {
+                                            let key = KEY.get().expect("Key not initialized");
+                                            if let Ok(decrypted) = String::from_utf8(
+                                                crypto::decrypt(pw_info.user_id.clone(), *key),
+                                            ) {
                                                 if let Ok(mut ctx) = ClipboardContext::new() {
-                                                    let _ = ctx.set_contents(username);
+                                                    let _ = ctx.set_contents(decrypted);
                                                 }
                                             }
                                         }
-                                    },
+                                    }
                                     _ => {}
                                 }
                                 app_state.waiting_for_second_key = None;
@@ -392,29 +451,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         if app_state.current_password.is_some() {
                                             app_state.waiting_for_second_key = Some('c');
                                         }
-                                    },
+                                    }
                                     's' => {
                                         if app_state.current_password.is_some() {
                                             app_state.show_password = !app_state.show_password;
                                         } else {
                                             app_state.input_mode = InputMode::Title;
                                         }
-                                    },
+                                    }
                                     'd' => {
                                         app_state.input_mode = InputMode::Delete;
-                                    },
+                                    }
                                     'g' => {
                                         app_state.input_mode = InputMode::Get;
-                                    },
+                                    }
                                     'f' => {
-                                        let _ = update_password_list(&mut stream, &mut app_state).await;
-                                    },
+                                        let _ =
+                                            update_password_list(&mut stream, &mut app_state).await;
+                                    }
                                     'h' => {
                                         app_state.input_mode = InputMode::Help;
-                                    },
+                                    }
                                     'q' => {
                                         break;
-                                    },
+                                    }
                                     _ => {}
                                 }
                             }
@@ -423,7 +483,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         } else {
                             app_state.input.push(c);
                         }
-                    },
+                    }
                     KeyCode::Backspace => {
                         app_state.input.pop();
                     }

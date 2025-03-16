@@ -1,3 +1,14 @@
+/*
+ * ----------------------------------------------------------------------------
+ * Project:     Personal Password Manager
+ * File:        client/main.rs
+ * Description: Client for accessing and decrypting stored passwords from the a
+ *              server. Also allows for password generation and management.
+ *
+ * Author:      RoscoeEH
+ * ---------------------------------------------------------------------------
+ */
+
 #![allow(dead_code)]
 
 use copypasta::{ClipboardContext, ClipboardProvider};
@@ -17,18 +28,16 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
 use std::error::Error;
-use std::io::{self as stdIO, stdout};
+use std::io::stdout;
 use std::sync::OnceLock;
 
-use hex;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use sha2::{Digest, Sha256};
 use std::str;
 
 mod crypto;
 
-// Global `OnceLock` for the key
+// Global OnceLock for the key
 static KEY: OnceLock<[u8; 32]> = OnceLock::new();
 
 // Password Structure
@@ -58,7 +67,7 @@ fn wrap_password(
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let title_hash = crypto::hash(crypto::HashInputType::Text(title.clone()));
 
-    // Get the key from the OnceLock
+    // Get the key
     let key = KEY.get().expect("Key not initialized");
 
     // Encrypt the sensitive fields
@@ -67,7 +76,7 @@ fn wrap_password(
     let encrypted_password = crypto::encrypt(password, *key);
     let encrypted_url = crypto::encrypt(url, *key);
 
-    // Create the PasswordInfo struct with encrypted data
+    // Create PasswordInfo struct
     let password_info = PasswordInfo {
         title_hash,
         title: encrypted_title,
@@ -120,14 +129,14 @@ struct AppState {
     items_per_page: usize,
 }
 
-// Add this struct to store password list items
+// Struct to store password list items
 #[derive(Clone)]
 struct ListItem {
     title: String,
     url: String,
 }
 
-// Add this function to receive and parse server responses
+// Receive and parse server responses
 async fn receive(stream: &mut TcpStream) -> Result<(u8, Vec<u8>), Box<dyn Error>> {
     let mut buffer = vec![0; 8192];
     let n = stream.read(&mut buffer).await?;
@@ -140,7 +149,7 @@ async fn receive(stream: &mut TcpStream) -> Result<(u8, Vec<u8>), Box<dyn Error>
     Ok((response_type, data))
 }
 
-// Updates the password list from the server
+// Update the password list from the server
 async fn update_password_list(
     stream: &mut TcpStream,
     app_state: &mut AppState,
@@ -163,9 +172,11 @@ async fn update_password_list(
                             }
                         })
                         .collect();
-                    
+
                     // Sort the password list by title
-                    app_state.password_list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+                    app_state
+                        .password_list
+                        .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
                 }
             }
         }
@@ -173,17 +184,20 @@ async fn update_password_list(
     Ok(())
 }
 
-// Make the validation function async
-async fn validate_password(password: &str, stream: &mut TcpStream) -> Result<[u8; 32], Box<dyn Error>> {
-    // Derive the key from the password
+// Validate password instead of the program exiting on wrong passwords
+async fn validate_password(
+    password: &str,
+    stream: &mut TcpStream,
+) -> Result<[u8; 32], Box<dyn Error>> {
+    // Derive key from the password
     let derived_key = crypto::key_derivation(password.to_string());
-    
+
     // Request the password list from the server to test decryption
     if let Ok(_) = send(stream, 3, b"").await {
         if let Ok((response_type, data)) = receive(stream).await {
             if response_type == 3 {
                 if let Ok(list) = serde_json::from_slice::<Vec<ServerListItem>>(&data) {
-                    // Try to decrypt the first item's title if there is one
+                    // Try to decrypt the first item's title
                     if !list.is_empty() {
                         // Try to decrypt and catch any errors
                         match std::panic::catch_unwind(|| {
@@ -194,47 +208,35 @@ async fn validate_password(password: &str, stream: &mut TcpStream) -> Result<[u8
                                 if String::from_utf8(title_bytes).is_ok() {
                                     return Ok(derived_key);
                                 }
-                            },
+                            }
                             Err(_) => {
                                 // Decryption failed - wrong password
                                 return Err("Invalid password".into());
                             }
                         }
                     } else {
-                        // No passwords yet
+                        // No passwords yet - sets new master password
                         return Ok(derived_key);
                     }
                 }
             }
         }
     }
-    
+
     Err("Invalid password".into())
 }
 
-// Main client function that takes input and communicates with the server
+// Main client function
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // KATs
-    crypto::aes256_kat();
-    crypto::pbkdf2_kat();
-    crypto::sha256_kat();
-    println!("All KATs passed!");
-
-    let test_pw = crypto::generate_password(20);
-    println!("Generated 20-digit test password {}", test_pw);
-
-    ////////////////////
-    // App Connection //
-    ////////////////////
-
     // connect to server
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
 
     // Password validation loop
     let derived_key = loop {
-        let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
-        
+        let input =
+            rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
+
         match validate_password(&input, &mut stream).await {
             Ok(key) => break key,
             Err(_) => {
@@ -245,7 +247,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Now store the validated key
-    KEY.set(derived_key).expect("Key has already been initialized");
+    KEY.set(derived_key)
+        .expect("Key has already been initialized");
 
     // Setup terminal
     enable_raw_mode()?;
@@ -257,7 +260,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Send request for password list
     send(&mut stream, 3, b"").await?;
 
-    // In main(), before the loop:
+    // display-able state options
     let mut app_state = AppState {
         input: String::new(),
         input_mode: InputMode::Command,
@@ -291,9 +294,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 })
                 .collect();
-            
+
             // Sort the password list by title
-            app_state.password_list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            app_state
+                .password_list
+                .sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         }
     }
 
@@ -350,32 +355,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     display.push_str("\nPress Esc to return to password list");
                 } else {
                     display.push_str("\nStored Passwords:\n");
-                    
+
                     // Calculate total pages
                     let total_pages = if app_state.password_list.is_empty() {
                         1
                     } else {
                         (app_state.password_list.len() - 1) / app_state.items_per_page + 1
                     };
-                    
+
                     // Get start and end indices for current page
                     let start_idx = app_state.current_page * app_state.items_per_page;
-                    let end_idx = (start_idx + app_state.items_per_page).min(app_state.password_list.len());
-                    
+                    let end_idx =
+                        (start_idx + app_state.items_per_page).min(app_state.password_list.len());
+
                     // Display page information
-                    display.push_str(&format!("\nPage {} of {} ({} items)\n", 
-                                      app_state.current_page + 1, 
-                                      total_pages,
-                                      app_state.password_list.len()));
-                    
-                    // Display only passwords for current page
+                    display.push_str(&format!(
+                        "\nPage {} of {} ({} items)\n",
+                        app_state.current_page + 1,
+                        total_pages,
+                        app_state.password_list.len()
+                    ));
+
+                    // Display passwords for current page
                     if app_state.password_list.is_empty() {
                         display.push_str("\nNo passwords stored.\n");
                     } else {
                         for item in &app_state.password_list[start_idx..end_idx] {
-                            display.push_str(&format!("\nTitle: {}\nURL: {}\n", item.title, item.url));
+                            display
+                                .push_str(&format!("\nTitle: {}\nURL: {}\n", item.title, item.url));
                         }
-                        
+
                         // Add navigation hints if multiple pages
                         if total_pages > 1 {
                             display.push_str("\nPress 'n' for next page, 'p' for previous page\n");
@@ -393,7 +402,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 InputMode::Title => "Enter title:",
                 InputMode::UserId => "Enter username:",
                 InputMode::Password => "Enter password:",
-                InputMode::GeneratePasswordPrompt => "Would you like to generate a password? (y/n):",
+                InputMode::GeneratePasswordPrompt => {
+                    "Would you like to generate a password? (y/n):"
+                }
                 InputMode::PasswordLengthPrompt => "Enter password length (recommended: 16-32):",
                 InputMode::Url => "Enter URL:",
                 InputMode::Delete => "Enter title to delete:",
@@ -577,12 +588,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                     }
                                     'n' => {
-                                        // Next page - only works in command mode with no password selected
                                         if app_state.current_password.is_none() {
-                                            let total_pages = if app_state.password_list.is_empty() {
+                                            let total_pages = if app_state.password_list.is_empty()
+                                            {
                                                 1
                                             } else {
-                                                (app_state.password_list.len() - 1) / app_state.items_per_page + 1
+                                                (app_state.password_list.len() - 1)
+                                                    / app_state.items_per_page
+                                                    + 1
                                             };
                                             if app_state.current_page + 1 < total_pages {
                                                 app_state.current_page += 1;
@@ -590,8 +603,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                         }
                                     }
                                     'p' => {
-                                        // Previous page - only works in command mode with no password selected
-                                        if app_state.current_password.is_none() && app_state.current_page > 0 {
+                                        if app_state.current_password.is_none()
+                                            && app_state.current_page > 0
+                                        {
                                             app_state.current_page -= 1;
                                         }
                                     }

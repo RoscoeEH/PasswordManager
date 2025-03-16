@@ -35,8 +35,8 @@ pub fn key_derivation(password: String) -> [u8; 32] {
     key
 }
 
-// #[test]
-pub fn pbkdf2_kat() {
+#[test]
+fn pbkdf2_kat() {
     let password = "test_password".to_string();
 
     let expected_key: [u8; 32] = [
@@ -83,8 +83,8 @@ pub fn decrypt(ciphertext: Vec<u8>, aes_key: [u8; 32]) -> Vec<u8> {
         .expect("Decryption Error")
 }
 
-// #[test]
-pub fn aes256_kat() {
+#[test]
+fn aes256_kat() {
     let key: [u8; 32] = [
         0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77,
         0x81, 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14,
@@ -121,8 +121,8 @@ pub fn hash(input: HashInputType) -> [u8; 32] {
     }
 }
 
-// #[test]
-pub fn sha256_kat() {
+#[test]
+fn sha256_kat() {
     let text_input = "hello world".to_string();
     let expected_hash: [u8; 32] = [
         0xb9, 0x4d, 0x27, 0xb9, 0x93, 0x4d, 0x3e, 0x08, 0xa5, 0x2e, 0x52, 0xd7, 0xda, 0x7d, 0xab,

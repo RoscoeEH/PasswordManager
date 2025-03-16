@@ -1,3 +1,14 @@
+/*
+ * ------------------------------------------------------------------------------
+ * Project:     Personal Password Manager
+ * File:        server/main.rs
+ * Description: Server that stores serialized and encrytped passwords associated
+ *              by hash values. Responds to client input for managing passwords.
+ *
+ * Author:      RoscoeEH
+ * ------------------------------------------------------------------------------
+ */
+
 use hex;
 use std::error::Error;
 use std::str;
@@ -7,7 +18,7 @@ use tokio::net::TcpListener;
 use rocksdb::DB;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 static STORAGE_PATH: &str = "password_map";
 static FULL_LIST: &str = "accounts_list";
@@ -32,8 +43,6 @@ fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
     let db = DB::open_default(STORAGE_PATH)?;
     let pw_info: PasswordInfo = serde_json::from_slice(pw_json)?;
     let title_hash_str = hex::encode(pw_info.title_hash);
-
-    println!("Storing password with hash: {}", title_hash_str);
 
     // Store the full encrypted password info
     db.put(&title_hash_str, pw_json)?;
@@ -62,7 +71,7 @@ fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     // Open the RocksDB database
     let db = DB::open_default(STORAGE_PATH)?;
 
-    // Convert the key (pw_id) from bytes to a hex string
+    // Convert the pw_id from bytes to a hex string
     let pw_id_str = hex::encode(pw_id);
 
     // Retrieve the full JSON stored under the title_hash key
@@ -72,6 +81,7 @@ fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     }
 }
 
+// Gets a list of passwords with a hash, title, and url
 fn get_list() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     let db = DB::open_default(STORAGE_PATH)?;
 
@@ -88,12 +98,7 @@ fn delete_password(title_hash: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>
     let db = DB::open_default(STORAGE_PATH)?;
     let title_hash_str = hex::encode(title_hash);
 
-    println!(
-        "Attempting to delete password with hash: {}",
-        title_hash_str
-    );
-
-    // Update the full list by removing the entry with matching hash
+    // Update the full list by removing password
     let mut full_list: Vec<ListItem> = match db.get(FULL_LIST)? {
         Some(list_data) => serde_json::from_slice(&list_data)?,
         None => Vec::new(),
@@ -136,7 +141,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         // Wait for inbound socket
         let (mut socket, addr) = tcp_listener.accept().await?;
-        println!("Accepted connection from {}", addr);
 
         // Spawn async task
         tokio::spawn(async move {
@@ -156,13 +160,9 @@ async fn handle_connection(
     loop {
         let n = match socket.read(&mut buffer).await {
             Ok(0) => {
-                println!("Connection closed by client: {}", addr);
                 break;
             }
-            Ok(n) => {
-                println!("Received {} bytes from client {}", n, addr);
-                n
-            }
+            Ok(n) => n,
             Err(e) => {
                 println!("Failed to read from socket: {}. Error: {}", addr, e);
                 break;
@@ -170,13 +170,12 @@ async fn handle_connection(
         };
 
         if n < 1 {
-            println!("No data received from client {}", addr);
             continue;
         }
 
         let request = buffer[0];
         let data = if request == 5 {
-            // For delete requests, take exactly 32 bytes
+            // Take exactly 32 bytes
             &buffer[1..33]
         } else {
             &buffer[1..n]
@@ -184,8 +183,7 @@ async fn handle_connection(
 
         match request {
             1 => {
-                println!("Processing store password request from {}", addr);
-                // Find the end of the JSON data (looking for '}')
+                // Find the end of the JSON data
                 let json_end = data
                     .iter()
                     .position(|&x| x == b'}')
@@ -195,19 +193,12 @@ async fn handle_connection(
                 let clean_data = &data[..json_end];
 
                 match serde_json::from_slice::<PasswordInfo>(clean_data) {
-                    Ok(_info) => {
-                        println!("Successfully parsed JSON");
-                        match store_password(clean_data) {
-                            Ok(_) => send(socket, 1, b"").await?,
-                            Err(e) => {
-                                println!("Failed to store password: {}", e);
-                                send(socket, 0, b"Store failed").await?
-                            }
-                        }
-                    }
+                    Ok(_) => match store_password(clean_data) {
+                        Ok(_) => send(socket, 1, b"").await?,
+                        Err(_) => send(socket, 0, b"Store failed").await?,
+                    },
                     Err(e) => {
                         println!("JSON parsing error: {}", e);
-                        println!("Raw data (hex): {:?}", clean_data);
                         send(socket, 0, b"Invalid JSON format").await?
                     }
                 }
@@ -220,20 +211,16 @@ async fn handle_connection(
                 }
             },
             3 => {
-                println!("Processing list request from {}", addr);
                 match get_list() {
                     Ok(item_list) => {
                         // Deserialize to count items
-                        if let Ok(list) = serde_json::from_slice::<Vec<ListItem>>(&item_list) {
-                            println!("Sending list with {} items", list.len());
-                        }
+                        if let Ok(_) = serde_json::from_slice::<Vec<ListItem>>(&item_list) {}
                         send(socket, 3, &item_list).await?
-                    },
+                    }
                     Err(e) => {
                         println!("Failed to get item list: {}", e);
                         // Send empty list
                         let empty_list = serde_json::to_vec(&Vec::<Value>::new())?;
-                        println!("Sending empty list");
                         send(socket, 3, &empty_list).await?
                     }
                 }
@@ -242,16 +229,13 @@ async fn handle_connection(
                 send(socket, 4, b"Session closed").await?;
                 break;
             }
-            5 => {
-                println!("Processing delete request from {}", addr);
-                match delete_password(data) {
-                    Ok(_) => send(socket, 5, b"Password deleted").await?,
-                    Err(e) => {
-                        println!("Failed to delete password: {}", e);
-                        send(socket, 0, b"Delete failed").await?
-                    }
+            5 => match delete_password(data) {
+                Ok(_) => send(socket, 5, b"Password deleted").await?,
+                Err(e) => {
+                    println!("Failed to delete password: {}", e);
+                    send(socket, 0, b"Delete failed").await?
                 }
-            }
+            },
             _ => {
                 println!("Unknown request type: {}", request);
                 send(socket, 0, b"Unknown request").await?;

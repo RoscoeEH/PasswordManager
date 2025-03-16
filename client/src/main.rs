@@ -173,6 +173,45 @@ async fn update_password_list(
     Ok(())
 }
 
+// Make the validation function async
+async fn validate_password(password: &str, stream: &mut TcpStream) -> Result<[u8; 32], Box<dyn Error>> {
+    // Derive the key from the password
+    let derived_key = crypto::key_derivation(password.to_string());
+    
+    // Request the password list from the server to test decryption
+    if let Ok(_) = send(stream, 3, b"").await {
+        if let Ok((response_type, data)) = receive(stream).await {
+            if response_type == 3 {
+                if let Ok(list) = serde_json::from_slice::<Vec<ServerListItem>>(&data) {
+                    // Try to decrypt the first item's title if there is one
+                    if !list.is_empty() {
+                        // Try to decrypt and catch any errors
+                        match std::panic::catch_unwind(|| {
+                            crypto::decrypt(list[0].title.clone(), derived_key)
+                        }) {
+                            Ok(title_bytes) => {
+                                // Successfully decrypted, check if it's valid UTF-8
+                                if String::from_utf8(title_bytes).is_ok() {
+                                    return Ok(derived_key);
+                                }
+                            },
+                            Err(_) => {
+                                // Decryption failed - wrong password
+                                return Err("Invalid password".into());
+                            }
+                        }
+                    } else {
+                        // No passwords yet
+                        return Ok(derived_key);
+                    }
+                }
+            }
+        }
+    }
+    
+    Err("Invalid password".into())
+}
+
 // Main client function that takes input and communicates with the server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -185,22 +224,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let test_pw = crypto::generate_password(20);
     println!("Generated 20-digit test password {}", test_pw);
 
-    // Get key and load it into oncelock
-    // let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
-
-    // auto password for debug
-    let input = String::from("Password");
-    println!("Using test password for debugging: {}", input);
-
-    KEY.set(crypto::key_derivation(input))
-        .expect("Key has already been initialized");
-
     ////////////////////
     // App Connection //
     ////////////////////
 
     // connect to server
     let mut stream = TcpStream::connect("127.0.0.1:8080").await?;
+
+    // Password validation loop
+    let derived_key = loop {
+        let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
+        
+        match validate_password(&input, &mut stream).await {
+            Ok(key) => break key,
+            Err(_) => {
+                println!("Invalid password. Please try again.");
+                continue;
+            }
+        }
+    };
+
+    // Now store the validated key
+    KEY.set(derived_key).expect("Key has already been initialized");
 
     // Setup terminal
     enable_raw_mode()?;

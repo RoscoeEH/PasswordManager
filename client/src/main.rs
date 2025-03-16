@@ -161,6 +161,9 @@ async fn update_password_list(
                             }
                         })
                         .collect();
+                    
+                    // Sort the password list by title
+                    app_state.password_list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
                 }
             }
         }
@@ -241,6 +244,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 })
                 .collect();
+            
+            // Sort the password list by title
+            app_state.password_list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
         }
     }
 

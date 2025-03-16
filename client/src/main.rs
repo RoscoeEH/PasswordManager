@@ -97,6 +97,8 @@ enum InputMode {
     Title,
     UserId,
     Password,
+    GeneratePasswordPrompt,
+    PasswordLengthPrompt,
     Url,
     Delete,
     Help,
@@ -346,6 +348,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 InputMode::Title => "Enter title:",
                 InputMode::UserId => "Enter username:",
                 InputMode::Password => "Enter password:",
+                InputMode::GeneratePasswordPrompt => "Would you like to generate a password? (y/n):",
+                InputMode::PasswordLengthPrompt => "Enter password length (recommended: 16-32):",
                 InputMode::Url => "Enter URL:",
                 InputMode::Delete => "Enter title to delete:",
                 InputMode::Help => "Press any key to return",
@@ -396,12 +400,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             InputMode::UserId => {
                                 app_state.user_id = app_state.input.clone();
                                 app_state.input.clear();
-                                app_state.input_mode = InputMode::Password;
+                                // Go to the generate password prompt instead of directly to password input
+                                app_state.input_mode = InputMode::GeneratePasswordPrompt;
+                            }
+                            InputMode::GeneratePasswordPrompt => {
+                                if app_state.input.to_lowercase() == "y" {
+                                    // User wants to generate a password, ask for length
+                                    app_state.input.clear();
+                                    app_state.input_mode = InputMode::PasswordLengthPrompt;
+                                } else if app_state.input.to_lowercase() == "n" {
+                                    // User wants to enter password manually
+                                    app_state.input.clear();
+                                    app_state.input_mode = InputMode::Password;
+                                } else {
+                                    // Invalid input, clear and stay in the same mode
+                                    app_state.input.clear();
+                                }
                             }
                             InputMode::Password => {
                                 app_state.password = app_state.input.clone();
                                 app_state.input.clear();
                                 app_state.input_mode = InputMode::Url;
+                            }
+                            InputMode::PasswordLengthPrompt => {
+                                // Parse the length input
+                                if let Ok(length) = app_state.input.parse::<usize>() {
+                                    if length > 0 {
+                                        // Generate a password with the specified length
+                                        let generated_password = crypto::generate_password(length);
+                                        app_state.password = generated_password;
+                                        app_state.input.clear();
+                                        app_state.input_mode = InputMode::Url;
+                                    } else {
+                                        // Invalid length, clear and stay in the same mode
+                                        app_state.input.clear();
+                                    }
+                                } else {
+                                    // Invalid input, clear and stay in the same mode
+                                    app_state.input.clear();
+                                }
                             }
                             InputMode::Url => {
                                 app_state.url = app_state.input.clone();

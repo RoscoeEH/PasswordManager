@@ -114,6 +114,8 @@ struct AppState {
     current_password: Option<PasswordInfo>,
     show_password: bool,
     waiting_for_second_key: Option<char>,
+    current_page: usize,
+    items_per_page: usize,
 }
 
 // Add this struct to store password list items
@@ -217,6 +219,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         current_password: None,
         show_password: false,
         waiting_for_second_key: None,
+        current_page: 0,
+        items_per_page: 10,
     };
 
     // After sending the initial list request, receive and process the response
@@ -257,6 +261,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     display.push_str("- d: Delete a password\n");
                     display.push_str("- g: Get password details\n");
                     display.push_str("- f: Fetch password list\n");
+                    display.push_str("- n: Next page of passwords\n");
+                    display.push_str("- p: Previous page of passwords\n");
                     display.push_str("- q: Quit the program\n");
                     display.push_str("- h: Show this help\n");
                 } else if let Some(pw_info) = &app_state.current_password {
@@ -291,8 +297,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     display.push_str("\nPress Esc to return to password list");
                 } else {
                     display.push_str("\nStored Passwords:\n");
-                    for item in &app_state.password_list {
-                        display.push_str(&format!("\nTitle: {}\nURL: {}\n", item.title, item.url));
+                    
+                    // Calculate total pages
+                    let total_pages = if app_state.password_list.is_empty() {
+                        1
+                    } else {
+                        (app_state.password_list.len() - 1) / app_state.items_per_page + 1
+                    };
+                    
+                    // Get start and end indices for current page
+                    let start_idx = app_state.current_page * app_state.items_per_page;
+                    let end_idx = (start_idx + app_state.items_per_page).min(app_state.password_list.len());
+                    
+                    // Display page information
+                    display.push_str(&format!("\nPage {} of {} ({} items)\n", 
+                                      app_state.current_page + 1, 
+                                      total_pages,
+                                      app_state.password_list.len()));
+                    
+                    // Display only passwords for current page
+                    if app_state.password_list.is_empty() {
+                        display.push_str("\nNo passwords stored.\n");
+                    } else {
+                        for item in &app_state.password_list[start_idx..end_idx] {
+                            display.push_str(&format!("\nTitle: {}\nURL: {}\n", item.title, item.url));
+                        }
+                        
+                        // Add navigation hints if multiple pages
+                        if total_pages > 1 {
+                            display.push_str("\nPress 'n' for next page, 'p' for previous page\n");
+                        }
                     }
                 }
                 display
@@ -452,6 +486,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             app_state.show_password = !app_state.show_password;
                                         } else {
                                             app_state.input_mode = InputMode::Title;
+                                        }
+                                    }
+                                    'n' => {
+                                        // Next page - only works in command mode with no password selected
+                                        if app_state.current_password.is_none() {
+                                            let total_pages = if app_state.password_list.is_empty() {
+                                                1
+                                            } else {
+                                                (app_state.password_list.len() - 1) / app_state.items_per_page + 1
+                                            };
+                                            if app_state.current_page + 1 < total_pages {
+                                                app_state.current_page += 1;
+                                            }
+                                        }
+                                    }
+                                    'p' => {
+                                        // Previous page - only works in command mode with no password selected
+                                        if app_state.current_password.is_none() && app_state.current_page > 0 {
+                                            app_state.current_page -= 1;
                                         }
                                     }
                                     'd' => {

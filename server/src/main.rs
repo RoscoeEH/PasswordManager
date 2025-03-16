@@ -1,22 +1,16 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use hex;
 use std::error::Error;
 use std::str;
-use hex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
+use rocksdb::DB;
 
-use rocksdb::{DB};
-
-
-use serde::{Serialize, Deserialize};
-use serde_json::{Value, json};
-
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 static STORAGE_PATH: &str = "password_map";
 static FULL_LIST: &str = "accounts_list";
-
-
-
 
 #[derive(Serialize, Deserialize)]
 struct PasswordInfo {
@@ -27,7 +21,6 @@ struct PasswordInfo {
     url: Vec<u8>,
 }
 
-
 #[derive(Serialize, Deserialize)]
 struct ListItem {
     title_hash: [u8; 32],
@@ -35,17 +28,15 @@ struct ListItem {
     url: Vec<u8>,
 }
 
-
 fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
     let db = DB::open_default(STORAGE_PATH)?;
     let pw_info: PasswordInfo = serde_json::from_slice(pw_json)?;
     let title_hash_str = hex::encode(pw_info.title_hash);
-   
+
     println!("Storing password with hash: {}", title_hash_str);
-   
+
     // Store the full encrypted password info
     db.put(&title_hash_str, pw_json)?;
-
 
     // Create a reduced version for the list with just title and URL
     let list_item = ListItem {
@@ -54,18 +45,15 @@ fn store_password(pw_json: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
         url: pw_info.url,
     };
 
-
     // Update the full list with just titles and URLs
     let mut full_list: Vec<ListItem> = match db.get(FULL_LIST)? {
         Some(list_data) => serde_json::from_slice(&list_data)?,
         None => Vec::new(),
     };
 
-
     full_list.push(list_item);
     let updated_list = serde_json::to_vec(&full_list)?;
     db.put(FULL_LIST, updated_list)?;
-
 
     Ok(())
 }
@@ -74,22 +62,18 @@ fn get_password(pw_id: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     // Open the RocksDB database
     let db = DB::open_default(STORAGE_PATH)?;
 
-
     // Convert the key (pw_id) from bytes to a hex string
     let pw_id_str = hex::encode(pw_id);
 
-
     // Retrieve the full JSON stored under the title_hash key
     match db.get(&pw_id_str)? {
-        Some(value) => Ok(value),  // Return the full JSON as Vec<u8>
+        Some(value) => Ok(value), // Return the full JSON as Vec<u8>
         None => Err(Box::from("Password not found")),
     }
 }
 
-
 fn get_list() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     let db = DB::open_default(STORAGE_PATH)?;
-
 
     match db.get(FULL_LIST)? {
         Some(value) => Ok(value),
@@ -100,74 +84,74 @@ fn get_list() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
     }
 }
 
-
 fn delete_password(title_hash: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
     let db = DB::open_default(STORAGE_PATH)?;
     let title_hash_str = hex::encode(title_hash);
-   
-    println!("Attempting to delete password with hash: {}", title_hash_str);
-   
+
+    println!(
+        "Attempting to delete password with hash: {}",
+        title_hash_str
+    );
+
     // Update the full list by removing the entry with matching hash
-    let mut full_list: Vec<PasswordInfo> = match db.get(FULL_LIST)? {
+    let mut full_list: Vec<ListItem> = match db.get(FULL_LIST)? {
         Some(list_data) => serde_json::from_slice(&list_data)?,
         None => Vec::new(),
     };
 
+    full_list.retain(|item| item.title_hash != *title_hash);
 
-    full_list.retain(|pw| pw.title_hash != *title_hash);
-   
     // Store the updated list
     let updated_list = serde_json::to_vec(&full_list)?;
     db.put(FULL_LIST, updated_list)?;
 
-
     // Delete the password entry
     db.delete(&title_hash_str)?;
 
-
     Ok(())
 }
 
-
 // Send data to the client
-async fn send(socket: &mut tokio::net::TcpStream, request_type: u8, data: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn send(
+    socket: &mut tokio::net::TcpStream,
+    request_type: u8,
+    data: &[u8],
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut response = vec![request_type];
     response.extend_from_slice(data);
-   
+
     socket.write_all(&response).await?;
     Ok(())
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Assign address to localhost
     let address = String::from("127.0.0.1:8080");
 
-
     // Bind address to listener
     let tcp_listener = TcpListener::bind(&address).await?;
     println!("Server running on {}", address);
-   
+
     loop {
-    // Wait for inbound socket
-    let (mut socket, addr) = tcp_listener.accept().await?;
-    println!("Accepted connection from {}", addr);
+        // Wait for inbound socket
+        let (mut socket, addr) = tcp_listener.accept().await?;
+        println!("Accepted connection from {}", addr);
 
-
-    // Spawn async task
-    tokio::spawn(async move {
-        if let Err(e) = handle_connection(&mut socket, addr).await {
-        println!("Error handling connection from {}: {}", addr, e);
-        }
-    });
+        // Spawn async task
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(&mut socket, addr).await {
+                println!("Error handling connection from {}: {}", addr, e);
+            }
+        });
     }
 }
 
-
-async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::SocketAddr) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn handle_connection(
+    socket: &mut tokio::net::TcpStream,
+    addr: std::net::SocketAddr,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut buffer = vec![0; 1024];
-
 
     loop {
         let n = match socket.read(&mut buffer).await {
@@ -185,12 +169,10 @@ async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::S
             }
         };
 
-
         if n < 1 {
             println!("No data received from client {}", addr);
             continue;
         }
-
 
         let request = buffer[0];
         let data = if request == 5 {
@@ -199,20 +181,21 @@ async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::S
         } else {
             &buffer[1..n]
         };
-       
+
         match request {
             1 => {
                 println!("Processing store password request from {}", addr);
                 // Find the end of the JSON data (looking for '}')
-                let json_end = data.iter()
+                let json_end = data
+                    .iter()
                     .position(|&x| x == b'}')
                     .map(|p| p + 1)
                     .unwrap_or(data.len());
-               
+
                 let clean_data = &data[..json_end];
-               
+
                 match serde_json::from_slice::<PasswordInfo>(clean_data) {
-                    Ok(info) => {
+                    Ok(_info) => {
                         println!("Successfully parsed JSON");
                         match store_password(clean_data) {
                             Ok(_) => send(socket, 1, b"").await?,
@@ -221,7 +204,7 @@ async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::S
                                 send(socket, 0, b"Store failed").await?
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         println!("JSON parsing error: {}", e);
                         println!("Raw data (hex): {:?}", clean_data);
@@ -229,23 +212,28 @@ async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::S
                     }
                 }
             }
-            2 => {
-                match get_password(data) {
-                    Ok(password) => send(socket, 2, &password).await?,
-                    Err(e) => {
-                        println!("Failed to get password: {}", e);
-                        send(socket, 0, b"Password not found").await?
-                    }
+            2 => match get_password(data) {
+                Ok(password) => send(socket, 2, &password).await?,
+                Err(e) => {
+                    println!("Failed to get password: {}", e);
+                    send(socket, 0, b"Password not found").await?
                 }
-            }
+            },
             3 => {
                 println!("Processing list request from {}", addr);
                 match get_list() {
-                    Ok(item_list) => send(socket, 3, &item_list).await?,
+                    Ok(item_list) => {
+                        // Deserialize to count items
+                        if let Ok(list) = serde_json::from_slice::<Vec<ListItem>>(&item_list) {
+                            println!("Sending list with {} items", list.len());
+                        }
+                        send(socket, 3, &item_list).await?
+                    },
                     Err(e) => {
                         println!("Failed to get item list: {}", e);
-                        // Send empty list instead of error
+                        // Send empty list
                         let empty_list = serde_json::to_vec(&Vec::<Value>::new())?;
+                        println!("Sending empty list");
                         send(socket, 3, &empty_list).await?
                     }
                 }
@@ -272,4 +260,3 @@ async fn handle_connection(socket: &mut tokio::net::TcpStream, addr: std::net::S
     }
     Ok(())
 }
-

@@ -125,7 +125,7 @@ struct ListItem {
 
 // Add this function to receive and parse server responses
 async fn receive(stream: &mut TcpStream) -> Result<(u8, Vec<u8>), Box<dyn Error>> {
-    let mut buffer = vec![0; 1024];
+    let mut buffer = vec![0; 8192];
     let n = stream.read(&mut buffer).await?;
     if n == 0 {
         return Err("Connection closed by server".into());
@@ -179,7 +179,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Generated 20-digit test password {}", test_pw);
 
     // Get key and load it into oncelock
-    let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
+    // let input = rpassword::prompt_password("Enter Password: ").expect("Failed to read password");
+
+    // auto password for debug
+    let input = String::from("Password");
+    println!("Using test password for debugging: {}", input);
 
     KEY.set(crypto::key_derivation(input))
         .expect("Key has already been initialized");

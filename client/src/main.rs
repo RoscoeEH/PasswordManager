@@ -29,16 +29,13 @@ use tokio::net::TcpStream;
 
 use std::error::Error;
 use std::io::stdout;
-use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::str;
+use zeroize::Zeroizing;
 
 mod crypto;
-
-// Global OnceLock for the key
-static KEY: OnceLock<[u8; 32]> = OnceLock::new();
 
 // Password Structure
 #[derive(Serialize, Deserialize)]
@@ -64,11 +61,9 @@ fn wrap_password(
     user_id: String,
     password: String,
     url: String,
+    key: &[u8; 32],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let title_hash = crypto::hash(crypto::HashInputType::Text(title.clone()));
-
-    // Get the key
-    let key = KEY.get().expect("Key not initialized");
 
     // Encrypt the sensitive fields
     let encrypted_title = crypto::encrypt(title, *key);
@@ -127,6 +122,7 @@ struct AppState {
     waiting_for_second_key: Option<char>,
     current_page: usize,
     items_per_page: usize,
+    key: Zeroizing<[u8; 32]>,
 }
 
 // Struct to store password list items
@@ -158,14 +154,14 @@ async fn update_password_list(
         if let Ok((response_type, data)) = receive(stream).await {
             if response_type == 3 {
                 if let Ok(list) = serde_json::from_slice::<Vec<ServerListItem>>(&data) {
-                    let key = KEY.get().expect("Key not initialized");
+                    let key = &app_state.key;
 
                     app_state.password_list = list
                         .into_iter()
                         .filter_map(|item| {
                             match (
-                                String::from_utf8(crypto::decrypt(item.title, *key)),
-                                String::from_utf8(crypto::decrypt(item.url, *key)),
+                                String::from_utf8(crypto::decrypt(item.title, **key)),
+                                String::from_utf8(crypto::decrypt(item.url, **key)),
                             ) {
                                 (Ok(title), Ok(url)) => Some(ListItem { title, url }),
                                 _ => None,
@@ -246,10 +242,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    // Now store the validated key
-    KEY.set(derived_key)
-        .expect("Key has already been initialized");
-
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -274,20 +266,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         waiting_for_second_key: None,
         current_page: 0,
         items_per_page: 10,
+        key: Zeroizing::new(derived_key),
     };
 
     // After sending the initial list request, receive and process the response
     let (response_type, data) = receive(&mut stream).await?;
     if response_type == 3 {
         if let Ok(list) = serde_json::from_slice::<Vec<ServerListItem>>(&data) {
-            let key = KEY.get().expect("Key not initialized");
+            let key = &app_state.key;
 
             app_state.password_list = list
                 .into_iter()
                 .filter_map(|item| {
                     match (
-                        String::from_utf8(crypto::decrypt(item.title, *key)),
-                        String::from_utf8(crypto::decrypt(item.url, *key)),
+                        String::from_utf8(crypto::decrypt(item.title, **key)),
+                        String::from_utf8(crypto::decrypt(item.url, **key)),
                     ) {
                         (Ok(title), Ok(url)) => Some(ListItem { title, url }),
                         _ => None,
@@ -324,18 +317,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     display.push_str("- q: Quit the program\n");
                     display.push_str("- h: Show this help\n");
                 } else if let Some(pw_info) = &app_state.current_password {
-                    let key = KEY.get().expect("Key not initialized");
+                    let key = &app_state.key;
 
                     // Decrypt all fields
-                    let title = String::from_utf8(crypto::decrypt(pw_info.title.clone(), *key))
+                    let title = String::from_utf8(crypto::decrypt(pw_info.title.clone(), **key))
                         .unwrap_or_else(|_| "Invalid UTF-8".to_string());
                     let username =
-                        String::from_utf8(crypto::decrypt(pw_info.user_id.clone(), *key))
+                        String::from_utf8(crypto::decrypt(pw_info.user_id.clone(), **key))
                             .unwrap_or_else(|_| "Invalid UTF-8".to_string());
                     let password =
-                        String::from_utf8(crypto::decrypt(pw_info.password.clone(), *key))
+                        String::from_utf8(crypto::decrypt(pw_info.password.clone(), **key))
                             .unwrap_or_else(|_| "Invalid UTF-8".to_string());
-                    let url = String::from_utf8(crypto::decrypt(pw_info.url.clone(), *key))
+                    let url = String::from_utf8(crypto::decrypt(pw_info.url.clone(), **key))
                         .unwrap_or_else(|_| "Invalid UTF-8".to_string());
 
                     display.push_str("\nPassword Details:\n");
@@ -503,6 +496,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     app_state.user_id.clone(),
                                     app_state.password.clone(),
                                     app_state.url.clone(),
+                                    &app_state.key,
                                 ) {
                                     if let Ok(_) = send(&mut stream, 1, &json).await {
                                         let _ =
@@ -547,9 +541,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 match (first_key, c) {
                                     ('c', 'p') => {
                                         if let Some(pw_info) = &app_state.current_password {
-                                            let key = KEY.get().expect("Key not initialized");
+                                            let key = &app_state.key;
                                             if let Ok(decrypted) = String::from_utf8(
-                                                crypto::decrypt(pw_info.password.clone(), *key),
+                                                crypto::decrypt(pw_info.password.clone(), **key),
                                             ) {
                                                 if let Ok(mut ctx) = ClipboardContext::new() {
                                                     let _ = ctx.set_contents(decrypted);
@@ -559,9 +553,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     }
                                     ('c', 'u') => {
                                         if let Some(pw_info) = &app_state.current_password {
-                                            let key = KEY.get().expect("Key not initialized");
+                                            let key = &app_state.key;
                                             if let Ok(decrypted) = String::from_utf8(
-                                                crypto::decrypt(pw_info.user_id.clone(), *key),
+                                                crypto::decrypt(pw_info.user_id.clone(), **key),
                                             ) {
                                                 if let Ok(mut ctx) = ClipboardContext::new() {
                                                     let _ = ctx.set_contents(decrypted);

@@ -2,6 +2,7 @@
 name = "client"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -18,3 +19,4 @@ ratatui = "0.24.0"
 crossterm = "0.27.0"
 rpassword = "7.3"
 copypasta = "0.10"
+zeroize = "1.6"
